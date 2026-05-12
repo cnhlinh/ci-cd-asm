@@ -1,0 +1,128 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main, develop]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+  # Replace these placeholders with real values when deploying to actual servers
+  DEPLOY_USER: ubuntu
+  STAGING_HOST: 1.2.3.4
+  PRODUCTION_HOST: 5.6.7.8
+
+jobs:
+  # ── Staging: auto-deploy on push to develop ──────────────────────────────
+  deploy-staging:
+    name: Deploy → Staging
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/develop'
+    environment:
+      name: deploy
+      url: https://staging.example.com/
+    concurrency:
+      group: deploy-staging
+      cancel-in-progress: false
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve image tag
+        id: image
+        run: |
+          SHA=$(git rev-parse --short HEAD)
+          echo "tag=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy to staging server
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ env.STAGING_HOST }}
+          username: ${{ env.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          script: bash /opt/app/deploy.sh "${{ steps.image.outputs.tag }}"
+
+      - name: Verify health endpoint
+        run: |
+          URL="https://staging.example.com/health"
+          for i in $(seq 1 12); do
+            STATUS=$(curl -sf -o /dev/null -w "%{http_code}" "$URL" || echo "000")
+            if [ "$STATUS" = "200" ]; then
+              echo "Health check passed (HTTP $STATUS)"
+              exit 0
+            fi
+            echo "Attempt $i/12 — HTTP $STATUS, retrying in 5s..."
+            sleep 5
+          done
+          echo "Health check failed after 60s"
+          exit 1
+
+      - name: Deployment summary
+        if: always()
+        run: |
+          {
+            echo "## Staging Deployment"
+            echo "| | |"
+            echo "|---|---|"
+            echo "| **Image** | \`${{ steps.image.outputs.tag }}\` |"
+            echo "| **Commit** | \`${{ github.sha }}\` |"
+            echo "| **Actor** | @${{ github.actor }} |"
+            echo "| **Status** | ${{ job.status }} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ── Production: manual approval required, deploy on push to main ─────────
+  deploy-production:
+    name: Deploy → Production
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    environment:
+      name: deploy
+      url: https://example.com/
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve image tag
+        id: image
+        run: |
+          SHA=$(git rev-parse --short HEAD)
+          echo "tag=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy to production server
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ env.PRODUCTION_HOST }}
+          username: ${{ env.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }} 
+          script: bash /opt/app/deploy.sh "${{ steps.image.outputs.tag }}"
+
+      - name: Verify health endpoint
+        run: |
+          URL="https://example.com/health"
+          for i in $(seq 1 12); do
+            STATUS=$(curl -sf -o /dev/null -w "%{http_code}" "$URL" || echo "000")
+            if [ "$STATUS" = "200" ]; then
+              echo "Health check passed (HTTP $STATUS)"
+              exit 0
+            fi
+            echo "Attempt $i/12 — HTTP $STATUS, retrying in 5s..."
+            sleep 5
+          done
+          echo "Health check failed after 60s"
+          exit 1
+
+      - name: Deployment summary
+        if: always()
+        run: |
+          {
+            echo "## Production Deployment"
+            echo "| | |"
+            echo "|---|---|"
+            echo "| **Image** | \`${{ steps.image.outputs.tag }}\` |"
+            echo "| **Commit** | \`${{ github.sha }}\` |"
+            echo "| **Actor** | @${{ github.actor }} |"
+            echo "| **Status** | ${{ job.status }} |"
+          } >> "$GITHUB_STEP_SUMMARY"
